@@ -1,0 +1,17 @@
+[package]
+edition = "2021"
+name = "randomimagegen"
+version = "0.1.0"
+
+[dependencies]
+image = "0.25.1"
+rayon = "1.10.0"
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+incremental = false
+lto = true
+opt-level = 3
