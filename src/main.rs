@@ -1,7 +1,11 @@
+use image::{ImageBuffer, ImageFormat, Rgb};
 use rayon::prelude::*;
+
+use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
+use std::str;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -22,9 +26,9 @@ impl XorShift32 {
 
     fn next(&mut self) -> u32 {
         let mut x = self.x;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
+        x ^= x << 13i32;
+        x ^= x >> 17i32;
+        x ^= x << 5i32;
         self.x = x;
         x
     }
@@ -49,8 +53,16 @@ fn main() -> io::Result<()> {
         io::stdout().lock(),
     )?;
 
-    let width = ask("Enter width", "[ERR] Invalid width", io::stdout().lock())?;
-    let height = ask("Enter height", "[ERR] Invalid height", io::stdout().lock())?;
+    let width: u32 = ask("Enter width", "[ERR] Invalid width", io::stdout().lock())?;
+    let height: u32 = ask("Enter height", "[ERR] Invalid height", io::stdout().lock())?;
+
+    width.checked_mul(height).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Width and height are too large to be multiplied",
+        )
+    })?;
+
     let seed: u32 = ask("Enter seed", "[ERR] Invalid seed", io::stdout().lock())?;
     let path: String = ask(
         "Enter output path",
@@ -62,50 +74,57 @@ fn main() -> io::Result<()> {
 
     let (result, total_time) = time(|| -> io::Result<()> {
         let (rows, generation_time) = time(|| generate_random_pixels(seed, width, height, genmode));
-        eprintln!(
+        writeln!(
+            io::stderr(),
             "Generation finished in {}",
             format_duration(generation_time)
-        );
+        )?;
 
-        let (img, conversion_time) = time(|| convert_pixels_to_image_buffer(rows, width, height));
-        eprintln!(
+        let (conversion_result, conversion_time) =
+            time(|| convert_pixels_to_image_buffer(rows, width, height));
+        let img = conversion_result?;
+
+        writeln!(
+            io::stderr(),
             "Conversion finished in {}",
             format_duration(conversion_time)
-        );
+        )?;
 
-        let (result, write_time) = time(|| write_image_to_file(&output_file, &img));
-        result?;
-        eprintln!(
-            "Written to {:?} in {}",
-            output_file,
+        let (write_result, write_time) = time(|| write_image_to_file(&output_file, &img));
+        write_result?;
+        writeln!(
+            io::stderr(),
+            "Written to {} in {}",
+            output_file.to_string_lossy(),
             format_duration(write_time)
-        );
+        )?;
 
         Ok(())
     });
     result?;
-    eprintln!("Total time: {}", format_duration(total_time));
+    writeln!(io::stderr(), "Total time: {}", format_duration(total_time))?;
 
     Ok(())
 }
 
-fn pixel_grayscale(num: u32) -> image::Rgb<u8> {
-    image::Rgb([num as u8, num as u8, num as u8])
+fn pixel_grayscale(num: u32) -> Rgb<u8> {
+    let clamped = num % 256;
+    Rgb([clamped as u8, clamped as u8, clamped as u8])
 }
 
-fn pixel_colorful(num: u32) -> image::Rgb<u8> {
-    let r = num << 24 >> 24;
-    let g = num << 16 >> 24;
-    let b = num << 8 >> 24;
+fn pixel_colorful(num: u32) -> Rgb<u8> {
+    let r = (num << 24i32) >> 24i32;
+    let g = (num << 16i32) >> 24i32;
+    let b = (num << 8i32) >> 24i32;
 
-    image::Rgb([r as u8, g as u8, b as u8])
+    Rgb([r as u8, g as u8, b as u8])
 }
 
-// fn random_pixel(rng: &mut XorShift32, mode: GenerationMode) -> image::Rgb<u8> {
+// fn random_pixel(rng: &mut XorShift32, mode: GenerationMode) -> Rgb<u8> {
 //     match mode {
 //         GenerationMode::Grayscale => {
 //             let value = rng.next() % 256;
-//             image::Rgb([value as u8, value as u8, value as u8])
+//             Rgb([value as u8, value as u8, value as u8])
 //         }
 //         GenerationMode::Colorful => {
 //             let num = rng.next();
@@ -113,15 +132,15 @@ fn pixel_colorful(num: u32) -> image::Rgb<u8> {
 //             let g = num << 16 >> 24;
 //             let b = num << 8 >> 24;
 
-//             image::Rgb([r as u8, g as u8, b as u8])
+//             Rgb([r as u8, g as u8, b as u8])
 //         }
 //     }
 // }
 
 fn ask<T, W>(question: &str, error_message: &str, stdout: W) -> io::Result<T>
 where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Debug,
+    T: str::FromStr,
+    T::Err: fmt::Debug,
     W: Write,
 {
     fn read_line<T, W>(
@@ -131,8 +150,8 @@ where
         buffer: &mut String,
     ) -> io::Result<T>
     where
-        T: std::str::FromStr,
-        T::Err: std::fmt::Debug,
+        T: str::FromStr,
+        T::Err: fmt::Debug,
         W: Write,
     {
         write!(stdout, "{}: ", question)?;
@@ -222,7 +241,7 @@ fn generate_random_pixels(
     width: u32,
     height: u32,
     genmode: GenerationMode,
-) -> Vec<image::Rgb<u8>> {
+) -> Vec<Rgb<u8>> {
     // // older implementation that worked
     // let mut master_rng =
     //     XorShift32::new(seed.wrapping_mul(0xDEADBEEF).wrapping_add(0xCAFEBABE)).step_forward(100);
@@ -267,7 +286,7 @@ fn generate_random_pixels(
         })
         .collect::<Vec<_>>();
 
-    let mut rows = vec![image::Rgb([0, 0, 0]); (width * height) as usize];
+    let mut rows = vec![Rgb([0, 0, 0]); (width * height) as usize];
     match genmode {
         GenerationMode::Grayscale => {
             rows.par_chunks_exact_mut(width as usize)
@@ -293,7 +312,7 @@ fn generate_random_pixels(
 
     rows
 
-    // let mut rows = vec![image::Rgb([0, 0, 0]); (width * height) as usize];
+    // let mut rows = vec![Rgb([0, 0, 0]); (width * height) as usize];
 
     // // const F1: u32 = 0x4d0df4c7;
     // // const F2: u32 = 0x8980ab2b;
@@ -325,32 +344,36 @@ fn generate_random_pixels(
 }
 
 fn convert_pixels_to_image_buffer(
-    rows: Vec<image::Rgb<u8>>,
+    rows: Vec<Rgb<u8>>,
     width: u32,
     height: u32,
-) -> image::ImageBuffer<image::Rgb<u8>, std::vec::Vec<u8>> {
+) -> io::Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
     let raw_pixels = rows
         .into_iter()
         .flat_map(|pixel| pixel.0)
         .collect::<Vec<u8>>();
 
-    image::ImageBuffer::from_raw(width, height, raw_pixels)
-        .expect("Could not convert generated image into a buffer")
+    ImageBuffer::from_raw(width, height, raw_pixels).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Error while converting pixels to image buffer",
+        )
+    })
 }
 
 fn write_image_to_file(
     output_file: &PathBuf,
-    img: &image::ImageBuffer<image::Rgb<u8>, std::vec::Vec<u8>>,
+    img: &ImageBuffer<Rgb<u8>, Vec<u8>>,
 ) -> io::Result<()> {
-    let bw = OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .open(output_file)?;
-    let mut bw = BufWriter::new(bw);
+    let mut bw = BufWriter::new(file);
 
-    if let Err(e) = img.write_to(&mut bw, image::ImageFormat::Png) {
-        eprintln!("Error writing image: {}", e);
+    if let Err(e) = img.write_to(&mut bw, ImageFormat::Png) {
+        writeln!(io::stderr(), "Error writing image: {}", e)?;
     };
 
     Ok(())
@@ -358,7 +381,7 @@ fn write_image_to_file(
 
 fn format_duration(duration: Duration) -> String {
     if duration == Duration::ZERO {
-        "no time (0)".to_string()
+        "no time (0)".to_owned()
     } else if duration < Duration::from_micros(1) {
         format!(
             "{} {}",
@@ -413,7 +436,7 @@ fn format_duration(duration: Duration) -> String {
         if duration.subsec_nanos() != 0 {
             s.push(' ');
             s.push_str(&format_duration(Duration::from_nanos(
-                duration.subsec_nanos() as u64 % 1_000_000_000,
+                u64::from(duration.subsec_nanos()) % 1_000_000_000,
             )));
         }
 
