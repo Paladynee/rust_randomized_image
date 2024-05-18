@@ -89,22 +89,34 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn random_pixel(rng: &mut XorShift32, mode: GenerationMode) -> image::Rgb<u8> {
-    match mode {
-        GenerationMode::Grayscale => {
-            let value = rng.next() % 256;
-            image::Rgb([value as u8, value as u8, value as u8])
-        }
-        GenerationMode::Colorful => {
-            let num = rng.next();
-            let r = num << 24 >> 24;
-            let g = num << 16 >> 24;
-            let b = num << 8 >> 24;
-
-            image::Rgb([r as u8, g as u8, b as u8])
-        }
-    }
+fn pixel_grayscale(num: u32) -> image::Rgb<u8> {
+    image::Rgb([num as u8, num as u8, num as u8])
 }
+
+fn pixel_colorful(num: u32) -> image::Rgb<u8> {
+    let r = num << 24 >> 24;
+    let g = num << 16 >> 24;
+    let b = num << 8 >> 24;
+
+    image::Rgb([r as u8, g as u8, b as u8])
+}
+
+// fn random_pixel(rng: &mut XorShift32, mode: GenerationMode) -> image::Rgb<u8> {
+//     match mode {
+//         GenerationMode::Grayscale => {
+//             let value = rng.next() % 256;
+//             image::Rgb([value as u8, value as u8, value as u8])
+//         }
+//         GenerationMode::Colorful => {
+//             let num = rng.next();
+//             let r = num << 24 >> 24;
+//             let g = num << 16 >> 24;
+//             let b = num << 8 >> 24;
+
+//             image::Rgb([r as u8, g as u8, b as u8])
+//         }
+//     }
+// }
 
 fn ask<T, W>(question: &str, error_message: &str, stdout: W) -> io::Result<T>
 where
@@ -211,30 +223,105 @@ fn generate_random_pixels(
     height: u32,
     genmode: GenerationMode,
 ) -> Vec<image::Rgb<u8>> {
+    // // older implementation that worked
+    // let mut master_rng =
+    //     XorShift32::new(seed.wrapping_mul(0xDEADBEEF).wrapping_add(0xCAFEBABE)).step_forward(100);
+    // (0..height)
+    //     .map(|_| {
+    //         XorShift32::new(
+    //             master_rng
+    //                 .next()
+    //                 .wrapping_mul(0xDEADBEEF)
+    //                 .wrapping_add(0xCAFEBABE),
+    //         )
+    //         .step_forward(100)
+    //     })
+    //     .collect::<Vec<_>>()
+    //     .into_par_iter()
+    //     .flat_map(|mut thread_rng| {
+    //         let mut row = Vec::with_capacity(width as usize);
+
+    //         for _ in 0..width {
+    //             row.push(random_pixel(&mut thread_rng, genmode));
+    //         }
+
+    //         row
+    //     })
+    //     .collect::<Vec<_>>()
+
+    // -------------------------------------------------------------------------------
+
+    // old working example 2
     let mut master_rng =
         XorShift32::new(seed.wrapping_mul(0xDEADBEEF).wrapping_add(0xCAFEBABE)).step_forward(100);
-    (0..height)
+
+    let rngs = (0..height)
         .map(|_| {
             XorShift32::new(
                 master_rng
                     .next()
-                    .wrapping_mul(0xDEADBEEF)
-                    .wrapping_add(0xCAFEBABE),
+                    .wrapping_mul(0x4d0df4c7)
+                    .wrapping_add(0x8980ab2b),
             )
             .step_forward(100)
         })
-        .collect::<Vec<_>>()
-        .into_par_iter()
-        .flat_map(|mut thread_rng| {
-            let mut row = Vec::with_capacity(width as usize);
+        .collect::<Vec<_>>();
 
-            for _ in 0..width {
-                row.push(random_pixel(&mut thread_rng, genmode));
-            }
+    let mut rows = vec![image::Rgb([0, 0, 0]); (width * height) as usize];
+    match genmode {
+        GenerationMode::Grayscale => {
+            rows.par_chunks_exact_mut(width as usize)
+                .zip(rngs)
+                .for_each(|(row, mut rng)| {
+                    for pixel in row {
+                        let num = rng.next();
+                        *pixel = pixel_grayscale(num);
+                    }
+                });
+        }
+        GenerationMode::Colorful => {
+            rows.par_chunks_exact_mut(width as usize)
+                .zip(rngs)
+                .for_each(|(row, mut rng)| {
+                    for pixel in row {
+                        let num = rng.next();
+                        *pixel = pixel_colorful(num);
+                    }
+                });
+        }
+    }
 
-            row
-        })
-        .collect::<Vec<_>>()
+    rows
+
+    // let mut rows = vec![image::Rgb([0, 0, 0]); (width * height) as usize];
+
+    // // const F1: u32 = 0x4d0df4c7;
+    // // const F2: u32 = 0x8980ab2b;
+
+    // match genmode {
+    //     GenerationMode::Grayscale => {
+    //         rows.par_chunks_exact_mut(width as usize)
+    //             .enumerate()
+    //             .for_each(|(y, row)| {
+    //                 for (x, pixel) in row.iter_mut().enumerate() {
+    //                     let num = superfast_hash(x as u64, y as u64);
+    //                     *pixel = pixel_grayscale(num as u32);
+    //                 }
+    //             });
+    //     }
+    //     GenerationMode::Colorful => {
+    //         rows.par_chunks_exact_mut(width as usize)
+    //             .enumerate()
+    //             .for_each(|(y, row)| {
+    //                 for (x, pixel) in row.iter_mut().enumerate() {
+    //                     let num = superfast_hash(x as u64, y as u64);
+    //                     *pixel = pixel_colorful(num as u32);
+    //                 }
+    //             });
+    //     }
+    // }
+
+    // rows
 }
 
 fn convert_pixels_to_image_buffer(
@@ -270,7 +357,19 @@ fn write_image_to_file(
 }
 
 fn format_duration(duration: Duration) -> String {
-    if duration < Duration::from_millis(5) {
+    if duration == Duration::ZERO {
+        "no time (0)".to_string()
+    } else if duration < Duration::from_micros(1) {
+        format!(
+            "{} {}",
+            duration.as_nanos(),
+            if duration.as_nanos() == 1 {
+                "nanosecond"
+            } else {
+                "nanoseconds"
+            }
+        )
+    } else if duration < Duration::from_millis(5) {
         format!(
             "{} {}",
             duration.as_micros(),
@@ -290,7 +389,7 @@ fn format_duration(duration: Duration) -> String {
                 "milliseconds"
             }
         )
-    } else if duration < Duration::from_secs(60) {
+    } else if duration > Duration::from_secs(60) {
         let min = duration.as_secs() / 60;
         let sec = duration.as_secs() % 60;
         format!(
@@ -301,7 +400,7 @@ fn format_duration(duration: Duration) -> String {
             if sec == 1 { "second" } else { "seconds" }
         )
     } else {
-        format!(
+        let mut s = format!(
             "{} {}",
             duration.as_secs(),
             if duration.as_secs() == 1 {
@@ -309,6 +408,60 @@ fn format_duration(duration: Duration) -> String {
             } else {
                 "seconds"
             }
-        )
+        );
+
+        if duration.subsec_nanos() != 0 {
+            s.push(' ');
+            s.push_str(&format_duration(Duration::from_nanos(
+                duration.subsec_nanos() as u64 % 1_000_000_000,
+            )));
+        }
+
+        s
     }
 }
+// taken from https://www.shadertoy.com/view/XlGcRh
+// fn superfast_hash(x: u64, y: u64) -> u64 {
+//     {
+//         // uint hash = 8u, tmp;
+//         let mut hash: u64 = 8;
+
+//         // hash += data.x & 0xffffu;
+//         hash = hash.wrapping_add(x & 0xffff);
+//         // tmp = (((data.x >> 16) & 0xffffu) << 11) ^ hash;
+//         let mut tmp = (((x >> 16) & 0xffff) << 11) ^ hash;
+//         // hash = (hash << 16) ^ tmp;
+//         hash = (hash << 16) ^ tmp;
+
+//         // hash += hash >> 11;
+//         hash = hash.wrapping_add(hash >> 11);
+
+//         // hash += data.y & 0xffffu;
+//         hash = hash.wrapping_add(y & 0xffff);
+//         // tmp = (((data.y >> 16) & 0xffffu) << 11) ^ hash;
+//         tmp = (((y >> 16) & 0xffff) << 11) ^ hash;
+
+//         // hash = (hash << 16) ^ tmp;
+//         hash = (hash << 16) ^ tmp;
+
+//         // hash += hash >> 11;
+//         hash = hash.wrapping_add(hash >> 11);
+
+//         // /* Force "avalanching" of final 127 bits */
+//         // hash ^= hash << 3;
+//         hash ^= hash << 3;
+//         // hash += hash >> 5;
+//         hash = hash.wrapping_add(hash >> 5);
+//         // hash ^= hash << 4;
+//         hash ^= hash << 4;
+//         // hash += hash >> 17;
+//         hash = hash.wrapping_add(hash >> 17);
+//         // hash ^= hash << 25;
+//         hash ^= hash << 25;
+//         // hash += hash >> 6;
+//         hash = hash.wrapping_add(hash >> 6);
+
+//         // return hash;
+//         hash
+//     }
+// }
