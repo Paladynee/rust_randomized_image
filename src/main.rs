@@ -62,7 +62,10 @@ fn main() -> io::Result<()> {
 
     let (result, total_time) = time(|| -> io::Result<()> {
         let (rows, generation_time) = time(|| generate_random_pixels(seed, width, height, genmode));
-        eprintln!("Generation finished in {}", generation_time.as_millis());
+        eprintln!(
+            "Generation finished in {}",
+            format_duration(generation_time)
+        );
 
         let (img, conversion_time) = time(|| convert_pixels_to_image_buffer(rows, width, height));
         eprintln!(
