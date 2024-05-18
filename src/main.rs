@@ -62,23 +62,26 @@ fn main() -> io::Result<()> {
 
     let (result, total_time) = time(|| -> io::Result<()> {
         let (rows, generation_time) = time(|| generate_random_pixels(seed, width, height, genmode));
-        eprintln!("Generation finished in {}ms", generation_time.as_millis());
+        eprintln!("Generation finished in {}", generation_time.as_millis());
 
         let (img, conversion_time) = time(|| convert_pixels_to_image_buffer(rows, width, height));
-        eprintln!("Conversion finished in {}ms", conversion_time.as_millis());
+        eprintln!(
+            "Conversion finished in {}",
+            format_duration(conversion_time)
+        );
 
         let (result, write_time) = time(|| write_image_to_file(&output_file, &img));
         result?;
         eprintln!(
-            "Written to {:?} in {}ms",
+            "Written to {:?} in {}",
             output_file,
-            write_time.as_millis()
+            format_duration(write_time)
         );
 
         Ok(())
     });
     result?;
-    eprintln!("Total time: {}ms", total_time.as_millis());
+    eprintln!("Total time: {}", format_duration(total_time));
 
     Ok(())
 }
@@ -237,7 +240,7 @@ fn convert_pixels_to_image_buffer(
     height: u32,
 ) -> image::ImageBuffer<image::Rgb<u8>, std::vec::Vec<u8>> {
     let raw_pixels = rows
-        .into_par_iter()
+        .into_iter()
         .flat_map(|pixel| pixel.0)
         .collect::<Vec<u8>>();
 
@@ -261,4 +264,48 @@ fn write_image_to_file(
     };
 
     Ok(())
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration < Duration::from_millis(5) {
+        format!(
+            "{} {}",
+            duration.as_micros(),
+            if duration.as_micros() == 1 {
+                "microsecond"
+            } else {
+                "microseconds"
+            }
+        )
+    } else if duration < Duration::from_secs(1) {
+        format!(
+            "{} {}",
+            duration.as_millis(),
+            if duration.as_millis() == 1 {
+                "millisecond"
+            } else {
+                "milliseconds"
+            }
+        )
+    } else if duration < Duration::from_secs(60) {
+        let min = duration.as_secs() / 60;
+        let sec = duration.as_secs() % 60;
+        format!(
+            "{} {} {} {}",
+            min,
+            if min == 1 { "minute" } else { "minutes" },
+            sec,
+            if sec == 1 { "second" } else { "seconds" }
+        )
+    } else {
+        format!(
+            "{} {}",
+            duration.as_secs(),
+            if duration.as_secs() == 1 {
+                "second"
+            } else {
+                "seconds"
+            }
+        )
+    }
 }
